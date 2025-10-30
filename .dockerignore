@@ -1,0 +1,11 @@
+# Ignore MySQL data directory and other unnecessary files
+mysql-data
+*.pem
+*.cnf
+*.log
+__pycache__
+.git
+.gitignore
+Dockerfile
+README.md
+
