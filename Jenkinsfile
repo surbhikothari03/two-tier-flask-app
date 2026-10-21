@@ -1,65 +1,85 @@
-@Library("Shared") _
-pipeline{
-    
-    agent { label "dev"};
-    
-    stages{
-        stage("Code Clone"){
-            steps{
-               script{
-                   clone("https://github.com/LondheShubham153/two-tier-flask-app.git", "master")
-               }
+pipeline {
+    agent any
+
+    options {
+        disableConcurrentBuilds()
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
             }
         }
-        stage("Trivy File System Scan"){
-            steps{
-                script{
-                    trivy_fs()
+
+        // ---------- DEV (auto deploy) ----------
+        stage('Deploy to DEV') {
+            when { branch 'dev' }
+            environment {
+                FLASK_PORT = '3000'
+            }
+            steps {
+                sh '''
+                    docker compose -p twotier-dev -f docker-compose.ci.yml up -d --build
+
+                    for i in $(seq 1 20); do
+                        if curl -sf http://localhost:$FLASK_PORT/ > /dev/null; then
+                            echo "DEV app is UP"
+                            exit 0
+                        fi
+                        echo "waiting for app... $i"
+                        sleep 5
+                    done
+
+                    docker compose -p twotier-dev -f docker-compose.ci.yml logs --tail 50
+                    exit 1
+                '''
+            }
+        }
+
+        // ---------- PROD (approval ke baad) ----------
+        stage('Approval for PROD') {
+            when { branch 'master' }
+            steps {
+                timeout(time: 30, unit: 'MINUTES') {
+                    input message: 'Production par deploy karna hai?',
+                          ok: 'Yes, Deploy',
+                          submitter: 'azureuser'
                 }
             }
         }
-        stage("Build"){
-            steps{
-                sh "docker build -t two-tier-flask-app ."
+
+        stage('Deploy to PROD') {
+            when { branch 'master' }
+            environment {
+                FLASK_PORT = '4000'
             }
-            
-        }
-        stage("Test"){
-            steps{
-                echo "Developer / Tester tests likh ke dega..."
-            }
-            
-        }
-        stage("Push to Docker Hub"){
-            steps{
-                script{
-                    docker_push("dockerHubCreds","two-tier-flask-app")
-                }  
-            }
-        }
-        stage("Deploy"){
-            steps{
-                sh "docker compose up -d --build flask-app"
+            steps {
+                sh '''
+                    docker compose -p twotier-prod -f docker-compose.ci.yml up -d --build
+
+                    for i in $(seq 1 20); do
+                        if curl -sf http://localhost:$FLASK_PORT/ > /dev/null; then
+                            echo "PROD app is UP"
+                            exit 0
+                        fi
+                        echo "waiting for app... $i"
+                        sleep 5
+                    done
+
+                    docker compose -p twotier-prod -f docker-compose.ci.yml logs --tail 50
+                    exit 1
+                '''
             }
         }
     }
 
-post{
-        success{
-            script{
-                emailext from: 'mentor@trainwithshubham.com',
-                to: 'mentor@trainwithshubham.com',
-                body: 'Build success for Demo CICD App',
-                subject: 'Build success for Demo CICD App'
-            }
+    post {
+        always {
+            sh 'docker image prune -f'
         }
-        failure{
-            script{
-                emailext from: 'mentor@trainwithshubham.com',
-                to: 'mentor@trainwithshubham.com',
-                body: 'Build Failed for Demo CICD App',
-                subject: 'Build Failed for Demo CICD App'
-            }
-        }
+        success { echo 'Pipeline successful!' }
+        failure { echo 'Pipeline failed, Console Output check karo.' }
     }
 }
